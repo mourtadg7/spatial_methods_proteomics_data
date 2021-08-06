@@ -1,0 +1,460 @@
+---
+title: "Week 13 - UMAP vs PCA"
+author: "Gheeda Mourtada"
+date: "29/07/2021"
+output: pdf_document
+---
+
+
+
+\newpage
+
+```{r include=FALSE}
+library("SpatialExperiment")
+library("EBImage")
+library("readr")
+library("dplyr")
+library("ggplot2")
+library("spatstat")
+library("geometry")
+library("RColorBrewer")
+library("raster")
+library("genefilter")
+```
+
+
+
+```{r}
+load("/Users/mourtadg/Desktop/NSERC/se.rds")
+```
+
+```{r include=FALSE}
+SE
+SE_proteins <- SE[rowData(SE)$is_protein == 1,]
+SE_proteins <- SE_proteins[,colData(SE_proteins)$tumor_group %in% c("Immune", "Keratin-positive tumor")]
+SE <- SE_proteins
+SE <- SE[, colSums(assay(SE)) > 0]
+rm_outliers <- apply(assay(SE), 2, function(x){ sum(abs(x) > 5) >= 1 }) 
+SE <- SE[, which(!rm_outliers)]
+colData(SE)$cell_id <- paste0("mibi_", seq(1, dim(SE)[2]))
+colnames(SE) <- colData(SE)$cell_id
+colData(SE)$DONOR_NO <- as.character(colData(SE)$DONOR_NO)
+```
+
+```{r}
+SE
+```
+
+
+\newpage
+
+```{r}
+assay(SE)[1:6,1:6]
+```
+
+
+### Subsetting a subject
+
+```{r}
+subject_1<-SE[,colData(SE)$SampleID==3]
+subject_1
+```
+
+
+\newpage
+
+```{r}
+head(spatialCoords(subject_1))
+```
+
+```{r}
+cell_type <- ifelse(subject_1$immune_group != "not immune",
+                    subject_1$immune_group, "Tumor") 
+subject_1$cell_type <- cell_type
+
+spatial_coor<-as.data.frame(spatialCoords(subject_1))
+spatial_coor$cell_type<-cell_type
+head(spatial_coor)
+```
+
+\newpage
+
+```{r}
+table(spatial_coor$cell_type)
+```
+
+\newpage
+
+```{r}
+ggplot(filter(spatial_coor,
+              cell_type %in% c("B",  "Tumor")),
+       aes(x = x, y = y, col = cell_type)) +
+  geom_point() +
+  facet_grid( . ~ cell_type) +
+  theme_bw()+
+  guides(col = FALSE) +
+  labs(caption="Scatterplot of x- and y- positions of B and Tumor cells")
+```
+
+\newpage
+
+```{r}
+ggplot(filter(spatial_coor,
+              cell_type %in% c("CD3",
+                               "Tumor")),
+       aes(x = x, y = y, col = cell_type)) +
+  geom_point() +
+  facet_grid( . ~ cell_type) +
+  theme_bw()+
+  guides(col = FALSE) +
+  labs(caption="Scatterplot of x- and y- positions of CD3 and Tumor cells")
+```
+
+\newpage
+
+```{r}
+ggplot(filter(spatial_coor,
+              cell_type %in% c("CD4",
+                              "Tumor")),
+       aes(x = x, y = y, col = cell_type)) +
+  geom_point() +
+  facet_grid( . ~ cell_type) +
+  theme_bw()+
+  guides(col = FALSE) +
+  labs(caption="Scatterplot of x- and y- positions of CD4 and Tumor cells")
+```
+
+\newpage
+
+```{r}
+ggplot(filter(spatial_coor,
+              cell_type %in% c("CD8",  "Tumor")),
+       aes(x = x, y = y, col = cell_type)) +
+  geom_point() +
+  facet_grid( . ~ cell_type) +
+  theme_bw()+
+  guides(col = FALSE) +
+  labs(caption="Scatterplot of x- and y- positions of CD8 and Tumor cells")
+```
+
+\newpage
+
+```{r}
+ggplot(filter(spatial_coor,
+              cell_type %in% c("DC",  "Tumor")),
+       aes(x = x, y = y, col = cell_type)) +
+  geom_point() +
+  facet_grid( . ~ cell_type) +
+  theme_bw()+
+  guides(col = FALSE) +
+  labs(caption="Scatterplot of x- and y- positions of DC and Tumor cells")
+```
+
+
+\newpage
+
+```{r}
+ggplot(filter(spatial_coor,
+              cell_type %in% c("DC/Mono",  "Tumor")),
+       aes(x = x, y = y, col = cell_type)) +
+  geom_point() +
+  facet_grid( . ~ cell_type) +
+  theme_bw()+
+  guides(col = FALSE) +
+  labs(caption="Scatterplot of x- and y- positions of DC/Mono and Tumor cells")
+```
+
+
+\newpage
+
+```{r}
+ggplot(filter(spatial_coor,
+              cell_type %in% c("Macrophages",  "Tumor")),
+       aes(x = x, y = y, col = cell_type)) +
+  geom_point() +
+  facet_grid( . ~ cell_type) +
+  theme_bw()+
+  guides(col = FALSE) +
+  labs(caption="Scatterplot of x- and y- positions of Macrophages and Tumor cells")
+```
+
+\newpage
+
+```{r}
+ggplot(filter(spatial_coor,
+              cell_type %in% c("Mono/Neu",  "Tumor")),
+       aes(x = x, y = y, col = cell_type)) +
+  geom_point() +
+  facet_grid( . ~ cell_type) +
+  theme_bw()+
+  guides(col = FALSE) +
+  labs(caption="Scatterplot of x- and y- positions of Mono/Neu and Tumor cells")
+```
+
+
+\newpage
+
+```{r}
+ggplot(filter(spatial_coor,
+              cell_type %in% c("Neutrophils",  "Tumor")),
+       aes(x = x, y = y, col = cell_type)) +
+  geom_point() +
+  facet_grid( . ~ cell_type) +
+  theme_bw()+
+  guides(col = FALSE) +
+  labs(caption="Scatterplot of x- and y- positions of Neutrophils and Tumor cells")
+```
+
+\newpage
+
+```{r}
+ggplot(filter(spatial_coor,
+              cell_type %in% c("NK",  "Tumor")),
+       aes(x = x, y = y, col = cell_type)) +
+  geom_point() +
+  facet_grid( . ~ cell_type) +
+  theme_bw()+
+  guides(col = FALSE) +
+  labs(caption="Scatterplot of x- and y- positions of NK and Tumor cells")
+```
+
+
+\newpage
+
+```{r}
+ggplot(filter(spatial_coor,
+              cell_type %in% c("Other immune",  "Tumor")),
+       aes(x = x, y = y, col = cell_type)) +
+  geom_point() +
+  facet_grid( . ~ cell_type) +
+  theme_bw()+
+  guides(col = FALSE) +
+  labs(caption="Scatterplot of x- and y- positions of Other immune and Tumor cells")
+```
+
+\newpage
+
+```{r}
+ggplot(filter(spatial_coor,
+              cell_type %in% c("Tregs",  "Tumor")),
+       aes(x = x, y = y, col = cell_type)) +
+  geom_point() +
+  facet_grid( . ~ cell_type) +
+  theme_bw()+
+  guides(col = FALSE) +
+  labs(caption="Scatterplot of x- and y- positions of Tregs and Tumor cells")
+```
+
+
+\newpage
+
+# Using the `spatstat` package, finding density of tumor cells
+
+```{r}
+ln <- with(spatial_coor,
+ppp(x = x, y = y, marks = cell_type, 
+    xrange = range(x), yrange = range(y)))
+ln
+```
+
+\newpage
+
+### Convex hull
+
+We've observed rectangular windows in which point processes occur. We now consider a more restricted area which encloses the smallest area containing the point process.
+
+First, we get the x and y coordinates of the point process. Then, we use the `convhulln` function to return information about the convex hull of the points.
+
+Next, we use a for loop to assemble the set of line segments presented by the `convhulln` function in order to get a closed polygon. This is because the `convhulln` function presents those segments in random order and can work with multi-dimensional data.
+
+\newpage
+
+```{r}
+coords <- cbind(ln$x, ln$y) 
+chull <- convhulln(coords)
+
+pidx = integer(nrow(chull) + 1) 
+pidx[1:2] = chull[1, ]
+chull[1, ] = NA
+
+for(j in 3:length(pidx)) {
+  wh = which(chull == pidx[j-1], arr.ind = TRUE)
+  stopifnot(nrow(wh )== 1)
+  wh[, "col"] = 3 - wh[, "col"] ## 2->1, 1->2 
+  pidx[j] = chull[wh]
+  chull[wh[, "row"], ] = NA
+}
+pidx = rev(pidx)
+
+ggplot(tibble(x = ln$x, y = ln$y)[pidx, ], aes(x = x, y = y))+
+  geom_point() + geom_path() + coord_fixed()
+
+```
+
+\newpage
+
+### First order effects: intensity
+
+First order effects are usually related to external elements influencing the observed pattern. In our case, it is the intensity, as we consider the simplest spatial process as the Poisson process. 
+
+The `density` function allows us to compute an estimate of the intensity of our observed point process.
+
+
+
+```{r}
+d <- density(subset(ln, marks == "Tumor"),
+             edge=TRUE,
+             diggle=TRUE)
+plot(d, main="Tumor Cells Density Plot")
+```
+
+\newpage
+
+```{r}
+d <- density(subset(ln, marks == "B"),
+             edge=TRUE,
+             diggle=TRUE)
+plot(d, main="B Cells Density Plot")
+```
+
+\newpage
+
+# UMAP on protein expression
+
+Because large datasets are extremely common and difficult to interpret, along with the curse of dimensionality, tools that allow dimensional reduction of those datasets are quite useful. We will discuss tools such as UMAP, PCA, and Truncated-Rank PCA.
+
+Uniform manifold approximation and projection, _i.e. UMAP_, is a dimensional-reduction tool which is used through high-dimensional graph construction and its mapping to a lower dimensional graph. It can be used for visualization as well as general non-linear dimension reduction. Two parameters that impact the UMAP plot shape are: _number of neighbours_ and _minimum distance_. The first parameter corresponds to the _number of nearest neighbors_ which are used for the high-dimensional graph construction. This impacts the UMAP global vs local structure. On the other hand, the second parameter is the _minimum distance_ between points. This controls whether the points in low-dimensional space will be packed tightly or loosely. The resulting UMAP projection could greatly differ as we adjust those two parameters.
+
+\newpage
+
+```{r include=FALSE}
+library("umap")
+library("M3C")
+```
+
+## Transformed dataset
+
+```{r message=FALSE}
+set.seed(1)
+umap(assay(subject_1),
+     labels=colData(subject_1)$cell_type,
+     legendtitle = "Cell Type",
+     dotsize = 0.5)
+```
+
+\newpage
+
+## Untransformed dataset
+
+```{r message=FALSE}
+set.seed(1)
+untrans<-sinh(assay(subject_1))
+untrans<-untrans*colData(subject_1)$cellSize
+untrans<-round(untrans)
+umap(untrans,
+     labels=colData(subject_1)$cell_type,
+     legendtitle = "Cell Type",
+     dotsize = 0.5)
+```
+
+
+\newpage
+
+# PCA on protein expression
+
+Principal component analysis, _i.e. PCA_, is a technique which allows the creation of new uncorrelated variables that maximize variance. This means that the large dataset can be transformed into a smaller one, while still containing most of the information.
+
+The first and second principal components are the x and y axes, respectively. We choose the axes for visualization according to those which maximize the captured variance _(i.e. total variance explained)_.
+
+\newpage
+
+## Transformed dataset
+
+
+```{r}
+library(ggfortify)
+pca_res<-prcomp(assay(subject_1))
+summary(pca_res)
+```
+
+\newpage
+
+```{r}
+autoplot(pca_res)
+```
+
+\newpage
+
+As previously mentioned, the new variables constructed through PCA are also known as the principle components. Scree plots allow us to organize our information as the number of principal components increases and visualize the low-information components which we should discard.
+
+```{r}
+screeplot(pca_res, main="Screeplot of the first 10 PCs", xlab="Principal Components")
+```
+
+
+\newpage
+
+## Untransformed dataset
+
+```{r}
+pca_res1<-prcomp(untrans)
+summary(pca_res1)
+```
+
+\newpage
+
+```{r}
+autoplot(pca_res1)
+```
+
+\newpage
+
+```{r}
+screeplot(pca_res, main="Screeplot of the first 10 PCs", xlab="Principal Components")
+```
+
+\newpage
+
+# PCA plots transformed and untransformed data
+
+
+
+\newpage
+
+# Truncated-Rank PCA
+
+
+
+
+```{r include=FALSE}
+library("ade4")
+library("factoextra")
+library("sva")
+```
+
+
+\newpage
+
+## Differences between UMAP and truncated-rank PCA
+
+
+## PCA, truncated PCA, UMAP results and interpretations
+
+
+\newpage
+
+# References
+
+[Dimensionality reduction and visualization using PCA(Principal Component Analysis)](https://medium.com/@ashwin8april/dimensionality-reduction-and-visualization-using-pca-principal-component-analysis-8489b46c2ae0)
+
+[GIS and Spatial Statistics](http://csiss.ncgia.ucsb.edu/SPACE/workshops/2005/OSU/reading/presentations/tiefelsdorf-analysis.pdf)
+
+[MSMB Chapters 9 & 11](http://web.stanford.edu/class/bios221/book/Chap-MultivaHetero.html)
+
+[PCA Visualization in Python](https://plotly.com/python/pca-visualization/)
+
+[Plotting PCA (Principal Component Analysis)](https://cran.r-project.org/web/packages/ggfortify/vignettes/plot_pca.html)
+
+[UMAP: Uniform Manifold Approximation and Projection for Dimension Reduction](https://umap-learn.readthedocs.io/en/latest/)
+
+[Understanding UMAP](https://pair-code.github.io/understanding-umap/)

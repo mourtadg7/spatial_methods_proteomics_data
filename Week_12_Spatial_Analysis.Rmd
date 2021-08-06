@@ -1,0 +1,409 @@
+---
+title: "Spatial Statistical Methods for Spatial Omic Data"
+author: "Gheeda Mourtada"
+date: "21/07/2021"
+output: beamer_presentation
+---
+
+# Outline
+
+- Image segmentation
+- Spatial point pattern analysis
+- UMAP on protein expression
+
+----
+
+# Image Segmentation
+
+## Visualizing _tiff_ images
+
+```{r include=FALSE}
+library("SpatialExperiment")
+library("EBImage")
+library("readr")
+library("dplyr")
+library("ggplot2")
+library("spatstat")
+library("geometry")
+library("RColorBrewer")
+library("raster")
+library("genefilter")
+```
+
+\footnotesize
+```{r echo=FALSE, out.width="70%"}
+sub_1_tiff = readImage("/Users/mourtadg/Desktop/NSERC/TNBC_shareCellData/p1_labeledcellData.tiff")
+display(sub_1_tiff)
+```
+\normalsize
+
+-----
+
+# Example from _Modern Statistics for Modern Biology_ Chapter 11
+
+```{r}
+library("MSMB")
+imagefiles = system.file("images",
+                         c("image-DAPI.tif",
+  "image-FITC.tif", "image-Cy3.tif"),
+  package="MSMB")
+cells = readImage(imagefiles)
+```
+
+<!-- ----- -->
+
+<!-- ```{r} -->
+<!-- display(cells) -->
+<!-- ``` -->
+
+-----
+
+
+```{r}
+apply(cells, 3, range)
+cells[,,1]   = 32 * cells[,,1]
+cells[,,2:3] = 16 * cells[,,2:3]
+apply(cells, 3, range)
+```
+
+-----
+
+## Noise reduction by smoothing
+
+```{r}
+cellsSmooth = Image(dim = dim(cells))
+sigma = c(1, 3, 3)
+for(i in seq_along(sigma))
+  cellsSmooth[,,i] = filter2( cells[,,i],
+         filter = makeBrush(size = 51, shape = "gaussian",
+                            sigma = sigma[i]) )
+```
+
+-----
+
+## Adaptive thresholding
+
+```{r include=FALSE}
+disc = makeBrush(21, "disc")
+disc = disc / sum(disc)
+```
+
+\footnotesize
+```{r}
+nucThresh =
+  (cellsSmooth[,,1] - filter2(cellsSmooth[,,1], disc) > 0.02)
+```
+\normalsize
+
+-----
+
+# Morphological opening
+
+```{r}
+nucOpened = EBImage::opening(nucThresh,
+                  kern = makeBrush(5, shape = "disc"))
+```
+
+----
+
+# Segmentation into objects
+
+```{r}
+nucSeed = bwlabel(nucOpened)
+table(nucSeed)
+```
+
+-----
+
+# Issues: improper separations and holes
+
+```{r echo=FALSE}
+display(colorLabels(nucSeed))
+```
+
+```{r include=FALSE}
+nucMask = cellsSmooth[,,1] - filter2(cellsSmooth[,,1], disc) > 0
+nucMask = fillHull(nucMask)
+nuclei = propagate(cellsSmooth[,,1], nucSeed, mask = nucMask)
+```
+
+-----
+
+# Voronoi Tessellation
+
+\footnotesize
+```{r include=FALSE}
+zeros        = Image(dim = dim(nuclei))
+voronoiExamp = propagate(seeds = nuclei, x = zeros, lambda = 100)
+voronoiPaint = paintObjects(voronoiExamp, 1 - nucOpened)
+```
+\normalsize
+
+```{r echo=FALSE}
+display(voronoiPaint)
+```
+
+-----
+
+```{r}
+hist(log(cellsSmooth[,,3]) )
+```
+
+-----
+
+\footnotesize
+```{r}
+hist(log(cellsSmooth[,,3]), xlim = -c(3.6, 3.1), breaks = 300)
+```
+\normalsize
+
+-----
+
+```{r include=FALSE}
+bgPars = function(x) {
+  x    = log(x)
+  loc  = half.range.mode( x )
+  left = (x - loc)[ x < loc ]
+  wid  = sqrt( mean(left^2) )
+  c(loc = loc, wid = wid, thr = loc + 6*wid)
+}
+cellBg = apply(cellsSmooth, MARGIN = 3, FUN = bgPars)
+
+hist(log(cellsSmooth[,,3]), xlim = -c(3.6, 3.1), breaks = 300)
+abline(v = cellBg[c("loc", "thr"), 3], col = c("brown", "red"))
+
+cytoplasmMask = (cellsSmooth[,,2] > exp(cellBg["thr", 2])) |
+       nuclei | (cellsSmooth[,,3] > exp(cellBg["thr", 3]))
+
+cellbodies = propagate(x = cellsSmooth[,,3], seeds = nuclei,
+                       lambda = 1.0e-2, mask = cytoplasmMask)
+cellsColor = rgbImage(red   = cells[,,3],
+                      green = cells[,,2],
+                      blue  = cells[,,1])
+
+nucSegOnNuc  = paintObjects(nuclei, tgt = toRGB(cells[,,1]),
+                            col = "#ffff00")
+nucSegOnAll  = paintObjects(nuclei, tgt = cellsColor,
+                            col = "#ffff00")
+cellSegOnAll = paintObjects(cellbodies, tgt = nucSegOnAll,
+                            col = "#ff0080")
+```
+
+```{r echo=FALSE}
+display(cellbodies)
+```
+
+-----
+
+```{r echo=FALSE}
+display(cellsColor)
+```
+
+-----
+
+```{r echo=FALSE}
+display(nucSegOnNuc)
+```
+
+-----
+
+```{r echo=FALSE}
+display(nucSegOnAll)
+```
+
+-----
+
+```{r echo=FALSE}
+display(cellSegOnAll)
+```
+
+-----
+
+# Spatial point processes
+
+```{r}
+load("/Users/mourtadg/Desktop/NSERC/se.rds")
+```
+
+```{r include=FALSE}
+SE
+SE_proteins <- SE[rowData(SE)$is_protein == 1,]
+SE_proteins <- SE_proteins[,colData(SE_proteins)$tumor_group %in% c("Immune", "Keratin-positive tumor")]
+SE <- SE_proteins
+SE <- SE[, colSums(assay(SE)) > 0]
+rm_outliers <- apply(assay(SE), 2, function(x){ sum(abs(x) > 5) >= 1 }) 
+SE <- SE[, which(!rm_outliers)]
+colData(SE)$cell_id <- paste0("mibi_", seq(1, dim(SE)[2]))
+colnames(SE) <- colData(SE)$cell_id
+colData(SE)$DONOR_NO <- as.character(colData(SE)$DONOR_NO)
+```
+
+```{r}
+SE
+```
+
+-----
+
+## Subsetting a subject
+
+```{r}
+subject_1<-SE[,colData(SE)$SampleID==1]
+subject_1
+```
+
+-----
+
+```{r}
+head(spatialCoords(subject_1))
+```
+
+-----
+
+```{r}
+cell_type <- ifelse(subject_1$immune_group != "not immune",
+                    subject_1$immune_group, "Tumor") 
+subject_1$cell_type <- cell_type
+
+spatial_coor<-as.data.frame(spatialCoords(subject_1))
+spatial_coor$cell_type<-cell_type
+head(spatial_coor)
+```
+
+-----
+
+```{r}
+table(spatial_coor$cell_type)
+```
+
+-----
+
+```{r eval=FALSE}
+ggplot(filter(spatial_coor,
+              cell_type %in% c("B", "CD4")),
+       aes(x = x, y = y, col = cell_type)) +
+  geom_point() +
+  facet_grid( . ~ cell_type) +
+  guides(col = FALSE)
+```
+
+
+-----
+
+```{r warning=FALSE, echo=FALSE}
+ggplot(filter(spatial_coor,
+              cell_type %in% c("B",  "CD4")),
+       aes(x = x, y = y, col = cell_type)) +
+  geom_point() +
+  facet_grid( . ~ cell_type) +
+  guides(col = FALSE)
+```
+
+-----
+
+# Using the `spatstat` package
+
+```{r}
+ln <- with(spatial_coor,
+ppp(x = x, y = y, marks = cell_type, 
+    xrange = range(x), yrange = range(y)))
+ln
+```
+
+-----
+
+## Convex hull
+
+```{r echo=FALSE, out.width="80%"}
+coords <- cbind(ln$x, ln$y) 
+chull <- convhulln(coords)
+
+pidx = integer(nrow(chull) + 1) 
+pidx[1:2] = chull[1, ]
+chull[1, ] = NA
+
+for(j in 3:length(pidx)) {
+  wh = which(chull == pidx[j-1], arr.ind = TRUE)
+  stopifnot(nrow(wh )== 1)
+  wh[, "col"] = 3 - wh[, "col"] ## 2->1, 1->2 
+  pidx[j] = chull[wh]
+  chull[wh[, "row"], ] = NA
+}
+pidx = rev(pidx)
+
+ggplot(tibble(x = ln$x, y = ln$y)[pidx, ], aes(x = x, y = y))+
+  geom_point() + geom_path() + coord_fixed()
+
+```
+
+-----
+
+## First order effects: intensity
+
+```{r eval=FALSE}
+d <- density(subset(ln, marks == "Macrophages"),
+             edge=TRUE,
+             diggle=TRUE)
+plot(d)
+```
+
+-----
+
+```{r echo=FALSE, out.width="90%"}
+d <- density(subset(ln, marks == "Macrophages"),
+             edge=TRUE,
+             diggle=TRUE)
+plot(d)
+```
+
+
+-----
+
+# UMAP on protein expression
+
+Dimension reduction technique -- could be used for visualisation
+
+-----
+
+Let’s load the umap package and apply the UMAP transformation
+
+```{r include=FALSE}
+library("umap")
+library("M3C")
+```
+
+
+```{r}
+assays.umap = umap(assay(subject_1))
+```
+
+-----
+
+The output is an object and we can get a summary of its contents by printing it
+
+```{r echo=FALSE}
+assays.umap
+```
+
+-----
+
+
+```{r message=FALSE, out.width="80%"}
+umap(assay(subject_1),
+     labels=colData(subject_1)$cell_type,
+     legendtitle = "Cell Type")
+```
+
+-----
+
+# References
+
+[Easy quick PCA analysis in R](https://intobioinformatics.wordpress.com/2019/05/22/easy-quick-pca-analysis-in-r/)
+
+[lmcinnes/umap](https://github.com/lmcinnes/umap)
+
+[Modern Statistics for Modern Biology](http://web.stanford.edu/class/bios221/book/Chap-Images.html)
+
+[Running UMAP for data visualisation in R](https://www.r-bloggers.com/2019/06/running-umap-for-data-visualisation-in-r/)
+
+[UMAP: Uniform Manifold Approximation and Projection for Dimension Reduction](https://arxiv.org/abs/1802.03426)
+

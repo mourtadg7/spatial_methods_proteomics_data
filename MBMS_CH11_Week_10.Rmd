@@ -1,0 +1,165 @@
+---
+title: "Chapter 11 Code"
+author: "Gheeda Mourtada"
+date: "08/07/2021"
+output: pdf_document
+---
+
+## 11.15: Spatial statistics: point processes
+
+```{r include=FALSE}
+library("EBImage")
+library("readr")
+library("dplyr")
+library("ggplot2")
+library("spatstat")
+```
+
+```{r eval=FALSE}
+setwd("~/Downloads/data")
+cellclasses <- c("T_cells", "Tumor", "DCs", "other_cells")
+brcalymphnode <- lapply(cellclasses, function(k) {
+    read_csv(sprintf("99_4525D-%s.txt", k)) %>%
+    transmute(x = globalX,
+              y = globalY,
+              class = k)
+}) %>% bind_rows %>% mutate(class = factor(class))
+```
+
+```{r include=FALSE}
+setwd("~/Downloads/data")
+cellclasses <- c("T_cells", "Tumor", "DCs", "other_cells")
+brcalymphnode <- lapply(cellclasses, function(k) {
+    read_csv(sprintf("99_4525D-%s.txt", k)) %>%
+    transmute(x = globalX,
+              y = globalY,
+              class = k)
+}) %>% bind_rows %>% mutate(class = factor(class))
+```
+
+```{r}
+brcalymphnode
+```
+
+\newpage
+
+```{r}
+table(brcalymphnode$class)
+```
+
+\newpage
+
+
+```{r}
+ggplot(filter(brcalymphnode, class %in% c("T_cells", "Tumor")),
+   aes(x = x, y = y, col = class)) + geom_point(shape = ".") +
+   facet_grid( . ~ class) + guides(col = FALSE)
+```
+
+\newpage
+
+```{r}
+ln <- with(brcalymphnode,
+  ppp(x = x, y = y, marks = class, xrange = range(x), yrange = range(y)))
+ln
+```
+
+\newpage
+
+### Convex hull
+
+```{r}
+library("geometry")
+coords <- cbind(ln$x, ln$y)
+chull <- convhulln( coords )
+
+pidx = integer(nrow(chull) + 1)
+pidx[1:2] = chull[1, ]
+chull[1, ] = NA
+for(j in 3:length(pidx)) {
+  wh = which(chull == pidx[j-1], arr.ind = TRUE)
+  stopifnot(nrow(wh )== 1)
+  wh[, "col"] = 3 - wh[, "col"] ## 2->1, 1->2
+  pidx[j] = chull[wh]
+  chull[wh[, "row"], ] = NA
+}
+pidx = rev(pidx)
+
+ggplot(tibble(x = ln$x, y = ln$y)[pidx, ], aes(x = x, y = y)) +
+  geom_point() + geom_path() + coord_fixed()
+```
+
+\newpage
+
+```{r}
+ln <- with(brcalymphnode,
+   ppp(x = x, y = y, marks = class,
+       poly = coords[ pidx, ],
+       check = FALSE))
+ln
+```
+
+\newpage
+
+# 11.16: First order effects: the intensity
+
+```{r}
+d <- density(subset(ln, marks == "Tumor"),
+             edge=TRUE,
+             diggle=TRUE)
+plot(d)
+```
+
+\newpage
+
+
+```{r}
+rr <- relrisk(ln, sigma = 250)
+plot(rr)
+```
+
+\newpage
+
+# 11.17 Second order effects: spatial dependence
+
+```{r}
+gln = Gest(ln)
+gln
+```
+
+\newpage
+
+```{r}
+library("RColorBrewer")
+plot(gln, xlim = c(0, 10),
+     lty = 1, col = brewer.pal(4, "Set1"))
+```
+
+\newpage
+
+## Ripley’s _K_ function
+
+```{r}
+Lln = Linhom(subset(ln, marks == "T_cells"))
+Lln
+```
+
+```{r}
+plot(Lln, lty = 1, col = brewer.pal(3, "Set1"))
+```
+
+\newpage
+
+## The pair correlation function
+
+```{r}
+pcfln = pcf(Kinhom(subset(ln, marks == "T_cells")))
+plot(pcfln, lty = 1)
+plot(pcfln, lty = 1, xlim = c(0, 10))
+```
+
+\newpage
+
+# References
+
+[Modern Statistics for Modern Biology](http://web.stanford.edu/class/bios221/book/Chap-Images.html)

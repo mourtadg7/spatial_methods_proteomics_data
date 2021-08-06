@@ -1,0 +1,216 @@
+---
+title: "Marked Point Process"
+author: "Gheeda Mourtada"
+date: "02/06/2021"
+output: beamer_presentation
+---
+
+# Objectives
+
+- Create heatmap of subset of _genes vs cells_
+- Create heatmap of subset of _cells vs spatial locations_
+- Selecting a gene and viewing frequency & location on xy-plane 
+
+----
+
+We load the `SpatialExperiment` package, retrieve the data and assign variables to its components:
+\footnotesize
+```{r include=FALSE}
+library(tinytex)
+library(SpatialExperiment)
+```
+
+```{r}
+fishCoordinates <- read.table(file="fcortex.coordinates.txt", header=FALSE, sep=" ")
+colnames(fishCoordinates) <- c("Cell_ID", "Irrelevant", "x", "y")
+
+save(fishCoordinates, file="seqFISH_Coordinates.rda")
+
+fishCellLabels <- read.table(file="seqfish_cell_labels.tsv", header=FALSE, sep="\t")
+colnames(fishCellLabels) <- c("Cell_ID", "cluster", "class", "classID", "Irrelevant", "Prob")
+save(fishCellLabels, file="seqFISH_Labels.rda")
+
+fishFeaturesCounts <- read.table(file="seqfish_normalized_cortex_b2_testing.txt", header=FALSE, sep="\t", row.names=1)
+fishFeaturesCounts <- as.matrix(fishFeaturesCounts)
+save(fishFeaturesCounts, file="seqFISH_Counts.rda")
+```
+
+\normalsize
+
+----
+
+# Class handling
+
+As shown in the previous group meeting:
+
+\footnotesize
+```{r}
+se <- SpatialExperiment(rowData=rownames(fishFeaturesCounts),
+                        colData=fishCellLabels,
+                        assays=SimpleList(counts=as.matrix(fishFeaturesCounts)),
+                        spatialCoords=as.matrix(fishCoordinates))
+show(se)
+```
+\normalsize
+
+----
+
+# Genes vs Cells Subset
+
+We first randomly select 5 genes from the seqFISH data. Since the gene data is entered as row data into the `SpatialExperiment` class, we apply the transformation to the rows in the data frame.
+
+Note: we **set the seed** in order to get the same results every time we run the code
+
+```{r}
+set.seed(5)
+gene_sample<-se[sample(1:nrow(se),5, replace=FALSE),]
+gene_sample
+```
+
+----
+
+Note that the dimension has changed from 30 to 5 by 1597. Next, we randomly select 10 cells. This would be the column data we previously entered in the `SpatialExperiment` class.
+
+```{r}
+set.seed(5)
+cell_sample<-gene_sample[,sample(1:ncol(gene_sample),10,replace = FALSE)]
+cell_sample
+```
+
+----
+
+# Plotting two categorical variables
+
+Our new dataset:
+\footnotesize
+```{r}
+Z<-assay(cell_sample)
+Z
+```
+\normalsize
+
+----
+
+## Figure 1: Genes vs cells
+
+To plot this dataset as a heatmap, we could use the `heatmap` function from the `ggplot2` package, the enhanced heat map `heatmap.2` from `gplots`, or `pheatmap` from the `pheatmap` package:
+```{r include=FALSE, out.width = "70%"}
+library(pheatmap)
+```
+
+```{r out.width = "70%"}
+pheatmap(Z, main= "Gene Clustering in Cells")
+```
+
+----
+
+# Cells vs Spatial Locations Subset
+
+```{r}
+spatialCoords(cell_sample)
+```
+
+----
+
+In order to keep the same nomenclature used in the previous figure, we replace the `Cell_ID` column with the corresponding name of each cell
+
+```{r echo=TRUE, message=FALSE}
+cell_name<-rownames(colData(cell_sample))
+cell_coor<-cbind(cell_name,spatialCoords(cell_sample)[,c(3:4)])
+cell_coor
+```
+
+----
+
+## Figure 2: Spatial Location of Cells
+
+First approach was to transform the S4 object into a data frame and to use `ggplot2` to view the location of the cells on the xy-plane:
+
+```{r include=FALSE}
+library(ggplot2)
+```
+```{r echo=FALSE}
+ggplot(as.data.frame(cell_coor)) +
+  geom_point(mapping = aes(x,y,color=cell_name)) +
+  theme_bw() +
+  ggtitle("Location of Cells")
+```
+
+----
+
+## Figure 3: Gene Frequency and Location 
+
+To visualize the frequency and location of a selected gene, we can use point pattern analysis. We first install and load the `Spatstat` package and create a `ppp` (point pattern) object:
+
+```{r include=FALSE}
+library(spatstat)
+```
+
+1. Select the `mgam` gene from the gene-frequency matrix `Z`
+
+```{r}
+mgam_freq<-as.data.frame(Z[1,])
+colnames(mgam_freq) <- c("abundance")
+mgam_freq
+```
+
+----
+
+2. Create a matrix containing information about the `mgam` gene's frequency and spatial coordinates in each cell
+
+```{r}
+mgam<-cbind(mgam_freq,cell_coor[,c(2:3)])
+mgam
+```
+
+----
+
+**Data Modification Step:** _is there a better method?_
+
+This step was implemented in order have the frequency and coordinates information easily extracted
+
+```{r}
+mgam<- as.data.frame(lapply(mgam, rep, mgam$abundance))
+mgam
+```
+
+----
+
+3. Create a `ppp` (point pattern) object
+
+```{r warning=FALSE}
+mgam_loc<-ppp(as.numeric(mgam$x),
+       as.numeric(mgam$y),
+       owin(xrange = c(1000,6000), yrange = c(-4000,-500)))
+```
+
+```{r echo=FALSE, out.width="60%"}
+plot(mgam_loc, main='mgam Location in Observation Window')
+```
+
+----
+
+# Kernel Density
+
+```{r out.width = "60%"}
+mgam_den<-density(mgam_loc)
+class(mgam_den)
+plot(mgam_den, main='mgam Expression Density')
+```
+
+
+----
+
+# References
+
+[Analysing spatial point patterns in R](https://research.csiro.au/software/wp-content/uploads/sites/6/2015/02/Rspatialcourse_CMIS_PDF-Standard.pdf)
+
+[heatmap: Draw a Heat Map](https://www.rdocumentation.org/packages/stats/versions/3.6.2/topics/heatmap)
+
+[heatmap.2: Enhanced Heat Map](https://www.rdocumentation.org/packages/gplots/versions/3.1.1/topics/heatmap.2)
+
+[Point pattern analysis](https://rspatial.org/raster/analysis/8-pointpat.html)
+
+[Spatstat Quick Reference guide](http://spatstat.org/resources/spatstatQuickref.pdf)
+
+[Visualization with heatmap2](https://training.galaxyproject.org/training-material/topics/transcriptomics/tutorials/rna-seq-viz-with-heatmap2/tutorial.html)

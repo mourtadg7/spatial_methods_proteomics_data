@@ -1,0 +1,559 @@
+---
+title: "Creating SpatialExperiment Object From MIBI-TOF Dataset"
+author: "Gheeda Mourtada"
+date: "23/06/2021"
+output: beamer_presentation
+---
+
+# Outline
+
+- Motivation from _A Structured Tumor-Immune Microenvironment in Triple Negative Breast Cancer Revealed by Multiplexed Ion Beam Imaging_
+- Creating `SpatialExperiment` object from raw data and using it for preprocessing and data visualization
+- Limitations and work in progress
+
+
+----
+
+# Motivation of the study by Keren _et al._
+
+**Motivation:** reveal variability in the composition of tumor-immune populations across individuals
+
+- Profile 36 proteins at a subcellular resolution
+- Used multi-step analysis on _transformed data_
+
+----
+
+# The Technology
+
+**Multiplexed Ion Beam Imaging:** high-definition spatial proteomics
+
+```{r, echo=FALSE, out.width="50%", fig.cap="MIBI scan of tumor tissue"}
+setwd("~/Downloads")
+knitr::include_graphics("Tumor.png")
+```
+
+
+----
+
+# Exploring the data
+
+```{r}
+cellData<-read.csv("TNBC_shareCellData/cellData.csv")
+head(cellData[,1:3])
+```
+
+----
+
+Expression of different markers per cell
+
+```{r}
+head(cellData[,4:9])
+```
+
+----
+
+# Cell Classification
+
+```{r}
+head(cellData[,55:57])
+
+```
+
+
+----
+
+# Creating `SpatialExperiment` object from cellData file
+
+```{r include=FALSE}
+library(dplyr)
+library(plyr)
+library(raster)
+library(rgdal)
+library(ggplot2)
+library(ggthemes)
+library(pheatmap)
+library(tidyverse)
+library(knitr)
+library(SingleCellExperiment)
+library(SpatialExperiment)
+```
+
+`SpatialExperiment` is an open-source written in R, has **4 main components:**
+
+1. rowData
+2. colData
+3. assays
+4. spatialCoords
+
+----
+
+# Creating colData
+
+```{r tidy=TRUE}
+col_data<-bind_cols(cellData[,1:3],cellData[,53:57])
+head(col_data)
+```
+
+
+----
+
+# Expression matrix; `assays`
+
+```{r}
+exp_mat<-as.matrix(cellData[,4:52])
+head(exp_mat[,1:5])
+```
+
+----
+
+We apply the transpose `t` function to ensure that the columns are cells
+
+```{r}
+exp_mat<-t(exp_mat)
+head(rownames(exp_mat))
+```
+
+----
+
+# Why transform data?
+
+**arcsinh transformation:** stabilizing large values, keeping small values the same
+
+**cellSize:** uncertainty?
+
+----
+
+# Retrieving count data
+
+```{r}
+untrans_mat<-sinh(exp_mat)
+untrans_mat<-untrans_mat*col_data$cellSize
+head(untrans_mat[,1:4])
+```
+
+
+----
+
+# Constructing `rowData` for `SpatialExperiment`
+
+\footnotesize
+```{r}
+row_data<-data.frame(channel_names = rownames(untrans_mat))
+rownames(row_data)<-rownames(untrans_mat)
+head(row_data)
+```
+\normalsize
+
+
+----
+
+# Creating `SpatialExperiment` object
+
+```{r}
+se<- SpatialExperiment(rowData = row_data,
+  colData = col_data, assays = list(count = untrans_mat,
+                                    trans = exp_mat))
+se
+```
+
+
+----
+
+# Extracting spatial information from _.tiff_ files
+
+\footnotesize
+```{r eval=FALSE}
+# compute centroid x coordinate of each cell
+  centroid_x <- aggregate(df_rP[,1], 
+    by = list(df_rP[,3]), FUN = median)
+
+# compute centroid y coordinate of each cell
+  centroid_y <- aggregate(df_rP[,2], 
+    by = list(df_rP[,3]), FUN = median)
+```
+\normalsize
+
+```{r include=FALSE}
+tiff_file_list<- list.files(path="TNBC_shareCellData/",
+                            pattern = ".tiff")[1:41]
+tiff_file_ID <- as.list(seq_along(tiff_file_list))
+
+SpatialCoordGetter <- function(id){
+  
+  # extracting the sample IDs from the tiff files and creating raster object from it
+  sample_id <- as.numeric(gsub("p", "", gsub("_labeledcellData.tiff", "", tiff_file_list[id])))
+  str_name <- paste("TNBC_shareCellData/",tiff_file_list[id],
+                    sep = "")
+  r <- raster(str_name)
+  
+  # creating dataframe which includes spatial information
+  df_rP <- data.frame(rasterToPoints(r))
+  
+  # changing "value" column to "cellLabel"
+  colnames(df_rP)[3] <- "cellLabel"
+  
+  # compute centroid x coordinate of each cell
+  centroid_x <- aggregate(df_rP[,1], 
+    by = list(df_rP[,3]), FUN = median) %>%
+     dplyr::rename('cellLabel' = Group.1)  
+
+  # compute centroid y coordinate of each cell
+  centroid_y <- aggregate(df_rP[,2], 
+    by = list(df_rP[,3]), FUN = median) %>% 
+    dplyr::rename('y' = x, 'cellLabel' = Group.1) 
+
+  # creating a data frame with cellLabel, x, and y, and adding a sample id column
+  centroid_xy <- left_join(centroid_x, centroid_y, 
+                           by = "cellLabel")
+  
+  centroid_xy <- centroid_xy %>% mutate(sample_id = rep(sample_id,
+                                                        nrow(centroid_xy)))
+  
+  return(centroid_xy)
+}
+
+# binding the data frames of centorid of cell labels for all subjects
+centroid_xy_df <- map_dfr(tiff_file_ID, SpatialCoordGetter)
+
+# adding centroid_x and centroid_y to the SpatialExperiment object
+mibi_df <- data.frame(colData(se))
+mibi_df <- left_join(mibi_df,
+                     centroid_xy_df,
+                     by = c("SampleID" = "sample_id", "cellLabelInImage" = "cellLabel"))
+
+se$centroid_x <- mibi_df$x
+se$centroid_y <- mibi_df$y
+
+spatial_coords <- as.matrix(data.frame(
+  x = se$centroid_x, y = se$centroid_y))
+```
+
+----
+
+# Adding `spatialCoords` to `SpatialExperiment` object
+
+```{r}
+spatialCoords(se)<-spatial_coords
+se
+```
+
+----
+
+# Data Preprocessing
+
+## Classifying cells
+
+Accessing `colData` to classify cells according to group name rather than group number
+
+```{r}
+col_se<-colData(se)
+col_se$Group[col_se$Group==1]<-"Unidentified"
+col_se$Group[col_se$Group==2]<-"Immune"
+col_se$Group[col_se$Group==3]<-"Endothelial"
+col_se$Group[col_se$Group==4]<-"Mesenchymal-like"
+col_se$Group[col_se$Group==5]<-"Tumor"
+col_se$Group[col_se$Group==6]<-"Keratin-positive tumor"
+colData(se)$Group<-col_se$Group
+```
+
+----
+
+## Classifying immune cells into categories
+
+```{r echo=FALSE}
+head(col_se$immuneGroup)
+col_se$immuneGroup[col_se$immuneGroup==0]<-"Tumor"
+col_se$immuneGroup[col_se$immuneGroup==1]<-"Tregs"
+col_se$immuneGroup[col_se$immuneGroup==2]<-"CD4 T"
+col_se$immuneGroup[col_se$immuneGroup==3]<-"CD8 T"
+col_se$immuneGroup[col_se$immuneGroup==4]<-"CD3 T"
+col_se$immuneGroup[col_se$immuneGroup==5]<-"NK"
+col_se$immuneGroup[col_se$immuneGroup==6]<-"B"
+col_se$immuneGroup[col_se$immuneGroup==7]<-"Neutrophils"
+col_se$immuneGroup[col_se$immuneGroup==8]<-"Macrophages"
+col_se$immuneGroup[col_se$immuneGroup==9]<-"DC"
+col_se$immuneGroup[col_se$immuneGroup==10]<-"DC/Mono"
+col_se$immuneGroup[col_se$immuneGroup==11]<-"Mono/Neu"
+col_se$immuneGroup[col_se$immuneGroup==12]<-"Other immune"
+head(col_se$immuneGroup)
+colData(se)$immuneGroup<-col_se$immuneGroup
+```
+
+----
+
+## Adding the binary attribute is_protein to `rowData`
+
+```{r include=FALSE}
+load("~/Downloads/mibiSCE.rda")
+mibi<-mibi.sce
+is_protein<-rowData(mibi)$is_protein
+```
+
+```{r}
+rowData(se)$is_protein<-is_protein
+head(rowData(se))
+```
+
+----
+
+## Using is_protein for data filtering
+
+```{r}
+se <- se[rowData(se)$is_protein == 1,]
+se
+```
+
+----
+
+## Dropping columns with no count expression
+
+```{r tidy=TRUE}
+se <- se[, colSums(assay(se)) > 0]
+se
+```
+
+----
+
+## Dropping rows with no expression across columns
+
+```{r}
+se <- se[rowSums(assay(se)) > 0, ]
+se
+```
+
+\footnotesize
+```{r include=FALSE}
+se <- se[,
+         colData(se)$Group %in% c("Immune",
+                                  "Keratin-positive tumor")]
+```
+\normalsize
+
+----
+
+## Identification and removal of outliers
+
+```{r echo=FALSE}
+as.list(summary(as.vector(assay(se, "trans"))))
+```
+
+----
+
+```{r}
+rm_outliers <- apply(assay(se, "trans"), 2, function(x){ sum(abs(x) > 5 ) >= 1 })
+se<-se[, which(!rm_outliers)]
+se
+```
+
+----
+
+## Adding `colnames` to `SpatialExperiment` object
+
+```{r}
+colData(se)$cell_id <- paste0("mibi_", seq(1, dim(se)[2]))
+colnames(se) <- colData(se)$cell_id
+```
+
+----
+
+# Variability of protein expression in cells
+
+## Heatmap of a subset of samples (using transformed data)
+
+```{r warning=FALSE}
+subset_se<-subset(se, ,SampleID==(1:21))
+subset_se
+```
+
+----
+
+```{r warning=FALSE, eval=FALSE}
+subset_expression_mat<-assay(subset_se, "trans")
+
+col_subse<-data.frame(colData(subset_se))
+
+anno_col = data.frame(TumorGroup=col_subse$Group,
+                      ImmuneGroup=col_subse$immuneGroup)
+
+rownames(anno_col)<-colnames(subset_expression_mat)
+
+p<-pheatmap::pheatmap(subset_expression_mat,
+                   annotation_col = anno_col,
+                   cluster_rows = FALSE, 
+                   cluster_cols = FALSE, 
+                   fontsize_row = 8,
+                   show_colnames = FALSE)
+ggsave("subset_se.png",p)
+```
+
+```{r include=FALSE}
+subset_expression_mat<-assay(subset_se, "trans")
+
+col_subse<-data.frame(colData(subset_se))
+
+anno_col = data.frame(TumorGroup=col_subse$Group,
+                      ImmuneGroup=col_subse$immuneGroup)
+
+rownames(anno_col)<-colnames(subset_expression_mat)
+
+p<-pheatmap::pheatmap(subset_expression_mat,
+                   annotation_col = anno_col,
+                   cluster_rows = FALSE, 
+                   cluster_cols = FALSE, 
+                   fontsize_row = 8,
+                   show_colnames = FALSE)
+ggsave("subset_se.png",p)
+```
+
+----
+
+```{r, echo=FALSE, out.width="93%", fig.cap="Variability of protein expression in cells"}
+knitr::include_graphics("subset_se.png")
+```
+
+----
+
+# Variability of cell types in spatial location
+
+First, we match cells in _.tiff_ files to cells in CSV
+
+\footnotesize
+```{r eval=FALSE}
+noise_not_in_se <- unique(df_rP$values[!df_rP$values %in%
+                                         se$cellLabelInImage])
+
+# Mapping values from those that are in noise_not_in_se to Background
+cell_label_with_bg <- mapvalues((df_rP$values), 
+                                from = noise_not_in_se, 
+                                to = rep("Background",
+                                         length(noise_not_in_mibi)))
+
+# Mapping values which are not Background to cell_type
+cell_label_with_bg <- mapvalues((cell_label_with_bg), 
+                                from = se$cellLabelInImage, 
+                                to = se$cell_type)
+```
+\normalsize
+
+```{r include=FALSE}
+manual_col_sample_id <- c("B"="#1f77b4",
+                          "CD3 T"="#aec7e8",
+                          "CD4 T"="#ff7f0e",
+                          "CD8 T"="#ffbb78",
+                          "DC"="#2ca02c",
+                          "DC/Mono"="#98df8a",
+                          "Macrophages"="#c49c94",
+                          "Mono/Neu"="#ff9896",
+                          "Neutrophils"="#9467bd",
+                          "NK"="#c5b0d5",
+                          "Other immune"="#8c564b",
+                          "Tregs"="#e377c2",
+                          "Tumor"="#d62728",
+                          "Background"="black")
+
+tiff_file_list<- list.files(path="TNBC_shareCellData/",
+                            pattern = ".tiff")
+id<-c(10,31)
+
+for (val in id){
+str_name_id<- paste("TNBC_shareCellData/",tiff_file_list[val], sep = "")
+
+sample_id_each <- as.numeric(gsub("p", "", gsub("_labeledcellData.tiff", "", tiff_file_list[val])))
+r <- raster(str_name_id)
+mibi_sample_id <- se[, se$SampleID == sample_id_each]
+
+saveRDS(mibi_sample_id, paste(sample_id_each,".rds"))
+
+# Reading one of the saved SingleCellExperiment objects
+
+sce_file_list<- list.files(pattern = ".rds")
+
+df_rP <- data.frame(rasterToPoints(r))
+colnames(df_rP) <- c("X", "Y", "values")
+head(df_rP)
+
+noise_not_in_mibi <- unique(df_rP$values[!df_rP$values %in% mibi_sample_id$cellLabelInImage])
+
+# Adding cell_type column
+cell_type <- ifelse(mibi_sample_id$immuneGroup != "not immune", mibi_sample_id$immuneGroup, "Tumor")
+mibi_sample_id$cell_type <- cell_type
+
+# adding cell size column
+cell_size<-mapvalues((df_rP$values),
+                     from = mibi_sample_id$cellLabelInImage,
+                     to = mibi_sample_id$cellSize)
+df_rP$cell_size<-cell_size
+
+
+# Mapping values from those that are in noise_not_in_mibi to Background
+cell_label_with_bg <- mapvalues((df_rP$values), 
+                                from = noise_not_in_mibi, 
+                                to = rep("Background", length(noise_not_in_mibi)))
+
+
+# Mapping values which are not Background to cell_type
+cell_label_with_bg <- mapvalues((cell_label_with_bg), 
+                                from = mibi_sample_id$cellLabelInImage, 
+                                to = mibi_sample_id$cell_type)
+
+df_rP$cell_label_with_bg <- cell_label_with_bg
+
+df_rP$cell_label_with_bg <- factor(df_rP$cell_label_with_bg)
+
+df_rP$cell_label_with_bg <- factor(df_rP$cell_label_with_bg,
+                                   levels = c(levels(df_rP$cell_label_with_bg)[-which(levels(df_rP$cell_label_with_bg) == "Background")], "Background"))
+
+df_rP$subjectID <- sample_id_each 
+
+assign( paste("df_rP_sample_ID", val, sep = "_") , df_rP)  
+
+
+p<-ggplot(df_rP) + 
+  geom_point(aes(X, Y, color = cell_label_with_bg, size = cell_size)) +
+  theme_minimal() +
+  scale_color_manual(values = manual_col_sample_id) +
+  coord_quickmap() +
+  theme(aspect.ratio = 1, legend.position = "right") +
+  labs(color = "Cell types", size="Cell size")
+
+ggsave(paste0("df_rP_sample_ID_plot", val, ".png"), p)
+
+}
+```
+
+----
+
+```{r, echo=FALSE, out.width= "95%", fig.cap="Variability of cell types in spatial location sample 10 "}
+knitr::include_graphics("df_rP_sample_ID_plot10.png")
+```
+
+
+----
+
+
+```{r, echo=FALSE, out.width= "95%", fig.cap="Variability of cell types in spatial location sample 31"}
+knitr::include_graphics("df_rP_sample_ID_plot31.png")
+```
+
+
+----
+
+# Work in progress
+
+_Using the count data:_ integrating protein expression and spatial location of the cell to learn about biological variability
+
+Limitations in visualization?
+
+----
+
+# References
+
+[combine: Combining or subsetting SingleCellExperiment objects](https://rdrr.io/bioc/SingleCellExperiment/man/combine.html)
+
+[Integrating omics datasets across technologies and experiments](https://github.com/BIRSBiointegration/Hackathon/tree/master/sc-targeted-proteomics)
+
+[Interface to BioMart databases](https://bioconductor.org/packages/3.14/bioc/html/biomaRt.html)
+
+[IONPATH](https://www.ionpath.com)
+
+[MIBI Datasets](https://www.angelolab.com/mibi-data)

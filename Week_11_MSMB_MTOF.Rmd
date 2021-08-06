@@ -1,0 +1,165 @@
+---
+title: 'Spatial Statistics: MTOF Data'
+author: "Gheeda Mourtada"
+date: "15/07/2021"
+output: pdf_document
+---
+
+
+# Objective
+
+- Replicate exercises from _Modern Statistics for Modern Biology_ using `SpatialExperiment` object (MIBI-TOF data)
+
+
+\newpage
+
+# Previously saved `SpatialExperiment` object
+
+```{r}
+load("/Users/mourtadg/Desktop/NSERC/se.rds")
+```
+
+```{r include=FALSE}
+library("SpatialExperiment")
+library("EBImage")
+library("readr")
+library("dplyr")
+library("ggplot2")
+library("spatstat")
+library("geometry")
+library("RColorBrewer")
+
+SE
+SE_proteins <- SE[rowData(SE)$is_protein == 1,]
+SE_proteins <- SE_proteins[,colData(SE_proteins)$tumor_group %in% c("Immune", "Keratin-positive tumor")]
+SE <- SE_proteins
+SE <- SE[, colSums(assay(SE)) > 0]
+rm_outliers <- apply(assay(SE), 2, function(x){ sum(abs(x) > 5) >= 1 }) 
+SE <- SE[, which(!rm_outliers)]
+colData(SE)$cell_id <- paste0("mibi_", seq(1, dim(SE)[2]))
+colnames(SE) <- colData(SE)$cell_id
+colData(SE)$DONOR_NO <- as.character(colData(SE)$DONOR_NO)
+```
+
+```{r}
+SE
+```
+
+\newpage
+
+# Subsetting a subject
+
+```{r}
+subject_1<-SE[,colData(SE)$SampleID]
+subject_1
+```
+
+\newpage
+
+
+```{r}
+head(spatialCoords(subject_1))
+```
+
+\newpage
+
+```{r}
+cell_type <- ifelse(subject_1$immune_group != "not immune", subject_1$immune_group, "Tumor") 
+subject_1$cell_type <- cell_type
+
+spatial_coor<-as.data.frame(spatialCoords(subject_1))
+#label<-(colData(subject_1)$cellLabelInImage)
+spatial_coor$cell_type<-cell_type
+head(spatial_coor)
+```
+
+\newpage
+
+```{r}
+table(spatial_coor$cell_type)
+```
+
+\newpage
+
+```{r}
+ggplot(filter(spatial_coor,
+              cell_type %in% c("B", "Macrophages")),
+       aes(x = x, y = y, col = cell_type)) +
+  geom_point(shape = ".") +
+  facet_grid( . ~ cell_type) +
+  guides(col = FALSE)
+```
+
+\newpage
+
+```{r}
+ln <- with(spatial_coor,
+ppp(x = x, y = y, marks = cell_type, xrange = range(x), yrange = range(y)))
+ln
+```
+
+\newpage
+
+# Convex hull
+
+```{r}
+coords <- cbind(ln$x, ln$y) 
+chull <- convhulln(coords)
+
+pidx = integer(nrow(chull) + 1) 
+pidx[1:2] = chull[1, ]
+chull[1, ] = NA
+
+for(j in 3:length(pidx)) {
+  wh = which(chull == pidx[j-1], arr.ind = TRUE)
+  stopifnot(nrow(wh )== 1)
+  wh[, "col"] = 3 - wh[, "col"] ## 2->1, 1->2 
+  pidx[j] = chull[wh]
+  chull[wh[, "row"], ] = NA
+}
+pidx = rev(pidx)
+
+ggplot(tibble(x = ln$x, y = ln$y)[pidx, ], aes(x = x, y = y))+
+  geom_point() + geom_path() + coord_fixed()
+
+```
+
+\newpage
+
+# First order effects: intensity
+
+```{r}
+d <- density(subset(ln, marks == "Macrophages"),
+             edge=TRUE,
+             diggle=TRUE)
+plot(d)
+```
+
+\newpage
+
+
+```{r}
+rr <- relrisk(ln, sigma = 250)
+plot(rr)
+```
+
+<!-- \newpage -->
+
+<!-- # Second order effects: spatial dependence -->
+
+<!-- ```{r} -->
+<!-- gln = Gest(ln) -->
+<!-- gln -->
+<!-- ``` -->
+
+<!-- \newpage -->
+
+<!-- ```{r} -->
+<!-- plot(gln, xlim = c(0, 10), -->
+<!--      lty = 1, col = brewer.pal(4, "Set1")) -->
+<!-- ``` -->
+
+\newpage
+
+# Ripley’s _K_ function
+

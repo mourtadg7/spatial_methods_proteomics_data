@@ -1,0 +1,393 @@
+---
+title: "Giotto Vignette"
+author: "Gheeda Mourtada"
+date: "02/06/2021"
+output: beamer_presentation
+---
+
+## Introduction
+
+The `Giotto` package has both an analyzer and viewer that help exploring single-cell spatial expression data. We could explore potentially applying it to a selected dataset, as they've demonstrated general applicability
+
+
+**Installation:** lots of troubleshooting, Docker, ...success!
+
+
+_What is Docker?_
+
+A tool used often to create, deploy, and run applications through the use of containers. The containers allow applications to be run on any operating system.
+
+----
+
+```{r include=FALSE}
+library(tinytex, lib.loc = "/usr/local/lib/R/site-library")
+```
+
+
+## Global Instructions and Preparations
+
+To set up the environment we:
+
+1. Set working directory
+
+```{r echo=TRUE, results='hide'}
+library(Giotto)
+my_working_dir = '/data'
+```
+
+2. Set `Giotto` python path
+
+```{r echo=TRUE, results='hide', message=FALSE}
+python_path = NULL 
+if(is.null(python_path)) {
+  installGiottoEnvironment()
+}
+```
+
+----
+
+## seqFISH+ Cortex Dataset
+
+We look at images of fields that contain cells from mice cortices. The cooridnates of the cells are independent of each other.
+
+For visualization, we: 
+
+1. get _estimates_ based on the original image to offset the xy-values of each image field
+
+2. use that information to stitch all imaging fields and process all cells together
+
+**Nomenclature:**
+
+- SS (somatosensory) cortex and SVZ (subventricular zone) use for the gene expression matrix
+- FOV (field of view) information and cell coordinates use to stitch imaging fields
+
+----
+
+## Working With the Dataset
+
+1. Downloading data to working directory
+
+\footnotesize
+```{r echo=TRUE, results='hide', message=FALSE}
+getSpatialDataset(dataset = 'seqfish_SS_cortex', directory = my_working_dir, method = 'wget')
+```
+\normalsize
+
+- Set `Giotto` instructions (optional)
+
+\footnotesize
+```{r echo=TRUE, results='hide', message=FALSE}
+instrs = createGiottoInstructions(save_plot = TRUE,
+                                  show_plot = FALSE,
+                                  save_dir = my_working_dir,
+                                  python_path = python_path)
+```
+\normalsize
+
+2. Create `Giotto` object from provided paths
+
+\footnotesize
+```{r}
+expr_path = fs::path(my_working_dir, "cortex_svz_expression.txt")
+loc_path = fs::path(my_working_dir, "cortex_svz_centroids_coord.txt")
+meta_path = fs::path(my_working_dir, "cortex_svz_centroids_annot.txt")
+```
+\normalsize
+
+----
+
+3. Stitching multiple imaging fields together
+
+  + Merging location
+
+\footnotesize
+```{r}
+SS_locations = data.table::fread(loc_path)
+cortex_fields = data.table::fread(meta_path)
+SS_loc_annot = data.table::merge.data.table(SS_locations, cortex_fields, by = 'ID')
+SS_loc_annot[, ID := factor(ID, levels = paste0('cell_',1:913))]
+data.table::setorder(SS_loc_annot, ID)
+```
+\normalsize
+
+  + Create file with offset information
+  
+\footnotesize
+```{r}
+my_offset_file = data.table::data.table(field = c(0, 1, 2, 3, 4, 5, 6),
+                            x_offset = c(0, 1654.97, 1750.75, 1674.35, 675.5, 2048, 675),
+                            y_offset = c(0, 0, 0, 0, -1438.02, -1438.02, 0))
+```
+\normalsize
+
+----
+
+  + Create a stitch file
+  
+\footnotesize
+```{r}
+stitch_file = stitchFieldCoordinates(location_file = SS_loc_annot,
+                                     offset_file = my_offset_file,
+                                     cumulate_offset_x = T,
+                                     cumulate_offset_y = F,
+                                     field_col = 'FOV',
+                                     reverse_final_x = F,
+                                     reverse_final_y = T)
+stitch_file = stitch_file[,.(ID, X_final, Y_final)]
+my_offset_file = my_offset_file[,.(field, x_offset_final, y_offset_final)]
+```
+\normalsize
+
+----
+
+## Creating Giotto Object and Processing Data
+
+After completing the `Giotto` instructions and preparations, we're now ready to create a `Giotto` object
+
+\footnotesize
+```{r echo=TRUE, results='hide', message=FALSE, warning=FALSE}
+SS_seqfish <- createGiottoObject(raw_exprs = expr_path,
+                                 spatial_locs = stitch_file,
+                                 offset_file = my_offset_file,
+                                 instructions = instrs)
+```
+\normalsize
+
+To add additonal annotation if needed
+
+\footnotesize
+```{r}
+SS_seqfish = addCellMetadata(SS_seqfish,
+                             new_metadata = cortex_fields,
+                             by_column = T,
+                             column_cell_ID = 'ID')
+```
+\normalsize
+
+----
+
+Subsetting data to the cortex field of views
+
+\footnotesize
+```{r}
+cell_metadata = pDataDT(SS_seqfish)
+cortex_cell_ids = cell_metadata[FOV %in% 0:4]$cell_ID
+SS_seqfish = subsetGiotto(SS_seqfish, cell_ids = cortex_cell_ids)
+```
+\normalsize
+
+Data filtering
+
+\footnotesize
+```{r echo=TRUE}
+SS_seqfish <- filterGiotto(gobject = SS_seqfish,
+                        expression_threshold = 1,
+                        gene_det_in_min_cells = 10,
+                        min_det_genes_per_cell = 10,
+                        expression_values = c('raw'), verbose = T)
+```
+\normalsize
+----
+
+Data normalization
+
+\footnotesize
+```{r}
+SS_seqfish <- normalizeGiotto(gobject = SS_seqfish,
+                              scalefactor = 6000, verbose = T)
+```
+\normalsize
+
+----
+
+Adding gene & cell statistics
+
+\footnotesize
+```{r}
+SS_seqfish <- addStatistics(gobject = SS_seqfish)
+```
+\normalsize
+
+Adjusting expression matrix for technical or known variables
+
+\footnotesize
+```{r}
+SS_seqfish <- adjustGiottoMatrix(gobject = SS_seqfish,
+                                 expression_values = c('normalized'),
+                                 batch_columns = NULL,
+                                 covariate_columns = c('nr_genes', 'total_expr'),
+                                 return_gobject = TRUE,
+                                 update_slot = c('custom'))
+```
+\normalsize
+
+----
+
+Finally, to visualize
+
+\footnotesize
+```{r}
+spatPlot(gobject = SS_seqfish,
+         save_param = list(save_name = '2_spatplot'))
+```
+\normalsize
+
+----
+
+## Dimension Reduction
+
+First, we look at highly variable genes (HVG)
+
+\footnotesize
+```{r out.width='70%', return_plot=TRUE}
+SS_seqfish <- calculateHVG(gobject = SS_seqfish,
+                           method = 'cov_loess',
+                           difference_in_cov = 0.1,
+                           save_param = list(save_name = '3_a_HVGplot', base_height = 5, base_width = 5))
+```
+\normalsize
+
+----
+
+We can select genes based on the resulted HGV and gene statistics (both found in gene metadata)
+
+\footnotesize
+```{r}
+gene_metadata = fDataDT(SS_seqfish)
+featgenes = gene_metadata[hvg == 'yes' & perc_cells > 4 & mean_expr_det > 0.5]$gene_ID
+```
+\normalsize
+
+
+
+\footnotesize
+```{r}
+# Run PCA on expression values (default)
+SS_seqfish <- runPCA(gobject = SS_seqfish,
+                     genes_to_use = featgenes,
+                     scale_unit = F, center = F)
+```
+\normalsize
+
+----
+
+\footnotesize
+```{r}
+screePlot(SS_seqfish,
+          save_param = list(save_name = '3_b_screeplot'))
+```
+\normalsize
+
+----
+
+\footnotesize
+```{r}
+plotPCA(gobject = SS_seqfish,
+        save_param = list(save_name = '3_c_PCA_reduction'))
+```
+\normalsize
+
+----
+
+\footnotesize
+```{r out.width="90%"}
+# Run UMAP and tSNE on PCA space (default)
+SS_seqfish <- runUMAP(SS_seqfish, dimensions_to_use = 1:15, n_threads = 10)
+plotUMAP(gobject = SS_seqfish,
+         save_param = list(save_name = '3_d_UMAP_reduction'))
+```
+\normalsize
+
+----
+
+\footnotesize
+```{r}
+SS_seqfish <- runtSNE(SS_seqfish, dimensions_to_use = 1:15)
+plotTSNE(gobject = SS_seqfish,
+         save_param = list(save_name = '3_e_tSNE_reduction'))
+```
+\normalsize
+
+-----
+
+# Nearest neighbor network and clustering
+
+sNN network is the default _(i.e. shared nearest neighbour)_
+
+\footnotesize
+```{r}
+SS_seqfish <- createNearestNetwork(gobject = SS_seqfish,
+                                   dimensions_to_use = 1:15,
+                                   k = 15)
+```
+\normalsize
+
+----
+
+Leiden clustering
+
+\footnotesize
+```{r out.width="80%"}
+SS_seqfish <- doLeidenCluster(gobject = SS_seqfish, resolution = 0.4, n_iterations = 1000)
+plotUMAP(gobject = SS_seqfish,
+         cell_color = 'leiden_clus', show_NN_network = T, point_size = 2.5,
+         save_param = list(save_name = '4_a_UMAP_leiden'))
+```
+\normalsize
+
+-----
+
+Leiden subclustering for specified clusters
+
+\footnotesize
+```{r out.width="80%", message=FALSE}
+SS_seqfish = doLeidenSubCluster(gobject = SS_seqfish, cluster_column = 'leiden_clus',
+                             resolution = 0.2, k_neighbors = 10,
+                             hvg_param = list(method = 'cov_loess', difference_in_cov = 0.1),
+                             pca_param = list(expression_values = 'normalized', scale_unit = F),
+                             nn_param = list(dimensions_to_use = 1:5),
+                             selected_clusters = c(5, 6, 7),
+                             name = 'sub_leiden_clus_select')
+```
+\normalsize
+
+-----
+
+# Cluster relationships
+
+```{r out.width="70%"}
+showClusterHeatmap(gobject = SS_seqfish,
+                   cluster_column = 'sub_leiden_clus_select',
+                   save_param = list(save_name = '4_c_heatmap', units = 'cm'),
+                   row_names_gp = grid::gpar(fontsize = 9),
+                   column_names_gp = grid::gpar(fontsize = 9))
+```
+
+-----
+
+# Dendogram
+
+\footnotesize
+```{r out.width="85%"}
+showClusterDendrogram(SS_seqfish, h = 0.5, rotate = T,
+                      cluster_column = 'sub_leiden_clus_select',
+                      save_param = list(save_name = '4_d_dendro',
+                                        units = 'cm'))
+```
+\normalsize
+
+-----
+
+## References
+
+[Docker usage information](http://spatialgiotto.rc.fas.harvard.edu/docker_directory.html)
+
+[Giotto introduction video](https://www.youtube.com/watch?v=9LJRI7Bz9Xs)
+
+[Giotto: a toolbox for integrative analysis and visualization of spatial expression data](https://genomebiology.biomedcentral.com/articles/10.1186/s13059-021-02286-2)
+
+[Giotto/site github](https://rubd.github.io/Giotto_site/index.html)
+
+[tsne Package](https://cran.r-project.org/web/packages/tsne/tsne.pdf)
+
+[UMAP Package](https://cran.r-project.org/web/packages/umap/vignettes/umap.html)
